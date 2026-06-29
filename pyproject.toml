@@ -10,11 +10,13 @@ dependencies = [
     "google-api-python-client>=2.0",
     "google-auth-httplib2",
     "google-auth-oauthlib",
+    "google-genai",
     "anthropic>=0.25",
     "python-docx",
     "pypdf",
     "jsonschema>=4.0",
     "requests",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]

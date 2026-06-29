@@ -132,16 +132,14 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4, metavar="N", help="並列フォルダ取得数（デフォルト: 4）")
     args = parser.parse_args()
 
-    print("Drive に接続中...", file=sys.stderr)
-    service = build_drive_service()
-
     print(f"ファイル一覧を取得中... (並列数: {args.workers})", file=sys.stderr)
-    files = list_files(folder_id, service, recursive=True, max_workers=args.workers)
+    # service_factory を渡すことでスレッドごとに独立した接続を使用する
+    files = list_files(folder_id, recursive=True, max_workers=args.workers, service_factory=build_drive_service)
     state = load_state()
 
     print(f"{len(files)} 件取得しました", file=sys.stderr)
     if not files:
-        _diagnose(folder_id, service)
+        _diagnose(folder_id, build_drive_service())
         return
 
     write_csv(files, state, args.output)

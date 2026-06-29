@@ -1,5 +1,5 @@
-# ai-wiki セットアップスクリプト
-# 使い方: .\setup.ps1
+# ai-wiki setup script
+# Usage: .\setup.ps1
 
 $ErrorActionPreference = "Stop"
 
@@ -8,85 +8,78 @@ function Write-Ok($msg)   { Write-Host "    [OK] $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    [!]  $msg" -ForegroundColor Yellow }
 function Write-Fail($msg) { Write-Host "    [NG] $msg" -ForegroundColor Red }
 
-$ok = $true
+$allOk = $true
 
-# ---- 1. Python バージョン確認 ------------------------------------------------
-Write-Step "Python バージョン確認"
-try {
-    $ver = python --version 2>&1
-    $match = $ver -match "Python (\d+)\.(\d+)"
-    if ($match) {
-        $major = [int]$Matches[1]; $minor = [int]$Matches[2]
-        if ($major -gt 3 -or ($major -eq 3 -and $minor -ge 11)) {
-            Write-Ok "$ver"
-        } else {
-            Write-Fail "$ver（3.11 以上が必要です）"; $ok = $false
-        }
+# ---- 1. Python version -------------------------------------------------------
+Write-Step "Python version check"
+$pyver = python --version 2>&1
+if ($pyver -match "Python (\d+)\.(\d+)") {
+    $major = [int]$Matches[1]; $minor = [int]$Matches[2]
+    if ($major -gt 3 -or ($major -eq 3 -and $minor -ge 11)) {
+        Write-Ok "$pyver"
+    } else {
+        Write-Fail "$pyver  (requires 3.11+)"; $allOk = $false
     }
-} catch {
-    Write-Fail "python コマンドが見つかりません"; $ok = $false
+} else {
+    Write-Fail "python not found"; $allOk = $false
 }
 
-# ---- 2. 依存パッケージインストール -------------------------------------------
-Write-Step "依存パッケージのインストール"
+# ---- 2. Install dependencies -------------------------------------------------
+Write-Step "Install dependencies"
 python -m pip install -e ".[dev]" --quiet
-Write-Ok "pip install 完了"
+Write-Ok "pip install done"
 
-# ---- 3. .env ファイル確認 / 生成 ---------------------------------------------
-Write-Step ".env ファイル確認"
+# ---- 3. .env setup -----------------------------------------------------------
+Write-Step ".env check"
 if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"
-    Write-Warn ".env.example をコピーしました → .env を編集して各値を設定してください"
+    Write-Warn "Copied .env.example -> .env  (please fill in each value)"
 } else {
-    Write-Ok ".env が存在します"
+    Write-Ok ".env exists"
 }
 
-# 必須キーのチェック
+$envLines = Get-Content ".env" -ErrorAction SilentlyContinue
+
 $required = @("DRIVE_FOLDER_ID", "GEMINI_API_KEY", "GROWI_BASE_URL", "GROWI_API_TOKEN")
-$envContent = Get-Content ".env" -ErrorAction SilentlyContinue
 foreach ($key in $required) {
-    $line = $envContent | Where-Object { $_ -match "^$key=(.+)" }
-    if ($line -and $Matches[1] -notmatch "^\s*$|your-|sk-ant-\.\.\.|AIza\.\.\.|1xxx") {
-        Write-Ok "$key 設定済み"
+    $line = $envLines | Where-Object { $_ -match "^$key=(.+)" }
+    if ($line -and ($Matches[1] -notmatch "your-|AIza\.\.\.|1xxx|\.\.\.$")) {
+        Write-Ok "$key set"
     } else {
-        Write-Warn "$key が未設定です"
+        Write-Warn "$key not configured"
     }
 }
 
-# ---- 4. サービスアカウント認証情報確認 -----------------------------------------
-Write-Step "サービスアカウント認証情報確認"
-$credPath = $envContent |
-    Where-Object { $_ -match "^GOOGLE_APPLICATION_CREDENTIALS=(.+)" } |
-    ForEach-Object { $Matches[1] }
-
-if (-not $credPath) {
-    $credPath = "credentials/service_account.json"
-}
+# ---- 4. Service account credentials -----------------------------------------
+Write-Step "Service account credentials"
+$credPath = "credentials/service_account.json"
+$credLine = $envLines | Where-Object { $_ -match "^GOOGLE_APPLICATION_CREDENTIALS=(.+)" }
+if ($credLine) { $credPath = $Matches[1] }
 
 if (Test-Path $credPath) {
-    Write-Ok "$credPath が存在します"
+    Write-Ok "$credPath found"
 } else {
-    Write-Warn "$credPath が見つかりません"
-    Write-Host "        → GCP コンソールでサービスアカウントキーを作成し、$credPath に配置してください" -ForegroundColor Yellow
+    Write-Warn "$credPath not found"
+    Write-Host "        -> Create a service account key in GCP Console and place it at $credPath" -ForegroundColor Yellow
 }
 
-# ---- 5. テスト実行 -----------------------------------------------------------
-Write-Step "テスト実行"
-python -m pytest tests/ -q 2>&1
+# ---- 5. Run tests ------------------------------------------------------------
+Write-Step "Run tests"
+python -m pytest tests/ -q
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "すべてのテストが通過しました"
+    Write-Ok "All tests passed"
 } else {
-    Write-Fail "テストが失敗しています"; $ok = $false
+    Write-Fail "Some tests failed"; $allOk = $false
 }
 
-# ---- 結果サマリ --------------------------------------------------------------
+# ---- Summary -----------------------------------------------------------------
 Write-Host ""
-if ($ok) {
-    Write-Host "セットアップ完了。次のステップ:" -ForegroundColor Green
-    Write-Host "  1. .env の未設定項目を埋める"
-    Write-Host "  2. 共有ドライブにサービスアカウントを閲覧者として追加する"
-    Write-Host "  3. python list_inventory.py dump.csv  # 文書一覧の確認"
-    Write-Host "  4. python main.py                     # パイプライン実行"
+if ($allOk) {
+    Write-Host "Setup complete. Next steps:" -ForegroundColor Green
+    Write-Host "  1. Fill in any missing values in .env"
+    Write-Host "  2. Share the shared drive with the service account (Viewer)"
+    Write-Host "  3. python list_inventory.py dump.csv"
+    Write-Host "  4. python main.py"
 } else {
-    Write-Host "未解決の問題があります。上記の [!] / [NG] を確認してください。" -ForegroundColor Yellow
+    Write-Host "Some issues remain. Check the [!] / [NG] items above." -ForegroundColor Yellow
 }

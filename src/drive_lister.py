@@ -3,6 +3,7 @@
 from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 
 SUPPORTED_MIME_TYPES = {
     "application/vnd.google-apps.document",
@@ -18,26 +19,33 @@ _SHARED = {"supportsAllDrives": True, "includeItemsFromAllDrives": True}
 
 def list_files(
     folder_id: str,
-    service,
+    service=None,
     *,
     recursive: bool = False,
     max_workers: int = 1,
+    service_factory: Callable | None = None,
 ) -> list[dict]:
     """フォルダ内のサポート対象ファイル一覧を返す。
 
-    recursive=True のとき、サブフォルダを再帰的に探索する。
-    max_workers > 1 でフォルダ単位の並列取得を有効にする。
-    フォルダショートカットは循環の原因になるため常に無視する。
-
-    Returns:
-        [{"id", "name", "mimeType", "webViewLink", "modifiedTime", "folder_path"}, ...]
-        folder_path: ルート直下は ""、サブフォルダは "SubA/SubB" 形式
+    service: サービスオブジェクト（シングルスレッド用）
+    service_factory: サービスを生成するファクトリ関数（並列モード推奨）
+      httplib2 はスレッド非安全なため、max_workers > 1 の場合は
+      service_factory を渡してスレッドごとに独立した接続を生成すること。
     """
+    _local = threading.local()
+
+    def get_svc():
+        if service_factory is not None:
+            if not hasattr(_local, "instance"):
+                _local.instance = service_factory()
+            return _local.instance
+        return service
+
     visited: set[str] = set()
     lock = threading.Lock()
 
     if not recursive:
-        return _fetch_one(folder_id, "", service, lock, visited, fetch_subfolders=False)[0]
+        return _fetch_one(folder_id, "", get_svc, lock, visited, fetch_subfolders=False)[0]
 
     all_files: list[dict] = []
     pending = [(folder_id, "")]
@@ -45,7 +53,7 @@ def list_files(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         while pending:
             futures = {
-                executor.submit(_fetch_one, fid, path, service, lock, visited): path
+                executor.submit(_fetch_one, fid, path, get_svc, lock, visited): path
                 for fid, path in pending
             }
             pending = []
@@ -62,23 +70,17 @@ def list_files(
 def _fetch_one(
     folder_id: str,
     path: str,
-    service,
+    get_svc: Callable,
     lock: threading.Lock,
     visited: set[str],
     fetch_subfolders: bool = True,
 ) -> tuple[list[dict], list[dict], str]:
-    """1 フォルダ分のファイルとサブフォルダを取得する。
-
-    Returns:
-        (files, subfolders, path)
-        files: folder_path 付きファイルリスト
-        subfolders: {"id", "name"} のリスト
-        path: このフォルダ自身のパス（呼び出し元が sub_path を組み立てるために使う）
-    """
     with lock:
         if folder_id in visited:
             return [], [], path
         visited.add(folder_id)
+
+    svc = get_svc()
 
     file_q = (
         f"'{folder_id}' in parents and trashed = false"
@@ -87,7 +89,7 @@ def _fetch_one(
         + ")"
     )
     raw_files = (
-        service.files()
+        svc.files()
         .list(q=file_q, fields="files(id, name, mimeType, webViewLink, modifiedTime)", **_SHARED)
         .execute()
         .get("files", [])
@@ -102,7 +104,7 @@ def _fetch_one(
         f" and mimeType = '{FOLDER_MIME}'"
     )
     subfolders = (
-        service.files()
+        svc.files()
         .list(q=folder_q, fields="files(id, name)", **_SHARED)
         .execute()
         .get("files", [])
