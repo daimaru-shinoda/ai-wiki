@@ -132,15 +132,28 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4, metavar="N", help="並列フォルダ取得数（デフォルト: 4）")
     args = parser.parse_args()
 
+    svc = build_drive_service()
+
+    # ルートフォルダ名を取得してパスの基点にする
+    root_meta = svc.files().get(
+        fileId=folder_id, fields="name", supportsAllDrives=True
+    ).execute()
+    root_name = root_meta["name"]
+    print(f"ルートフォルダ: {root_name}", file=sys.stderr)
+
     print(f"ファイル一覧を取得中... (並列数: {args.workers})", file=sys.stderr)
-    # service_factory を渡すことでスレッドごとに独立した接続を使用する
     files = list_files(folder_id, recursive=True, max_workers=args.workers, service_factory=build_drive_service)
     state = load_state()
 
     print(f"{len(files)} 件取得しました", file=sys.stderr)
     if not files:
-        _diagnose(folder_id, build_drive_service())
+        _diagnose(folder_id, svc)
         return
+
+    # folder_path にルートフォルダ名を付加する
+    for f in files:
+        sub = f.get("folder_path", "")
+        f["folder_path"] = f"{root_name}/{sub}" if sub else root_name
 
     write_csv(files, state, args.output)
 
