@@ -1,9 +1,13 @@
 """Google Drive フォルダ内の文書一覧とメタデータを取得する。"""
 
 from __future__ import annotations
+import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
+
+from googleapiclient.errors import HttpError
 
 SUPPORTED_MIME_TYPES = {
     "application/vnd.google-apps.document",
@@ -88,11 +92,9 @@ def _fetch_one(
         + " or ".join(f"mimeType = '{m}'" for m in SUPPORTED_MIME_TYPES)
         + ")"
     )
-    raw_files = (
-        svc.files()
-        .list(q=file_q, fields="files(id, name, mimeType, webViewLink, modifiedTime)", **_SHARED)
-        .execute()
-        .get("files", [])
+    raw_files = _execute_with_retry(
+        svc.files().list(q=file_q, fields="files(id, name, mimeType, webViewLink, modifiedTime)", **_SHARED),
+        context=f"files in {path or '/'}",
     )
     files = [{**f, "folder_path": path} for f in raw_files]
 
@@ -103,11 +105,29 @@ def _fetch_one(
         f"'{folder_id}' in parents and trashed = false"
         f" and mimeType = '{FOLDER_MIME}'"
     )
-    subfolders = (
-        svc.files()
-        .list(q=folder_q, fields="files(id, name)", **_SHARED)
-        .execute()
-        .get("files", [])
+    subfolders = _execute_with_retry(
+        svc.files().list(q=folder_q, fields="files(id, name)", **_SHARED),
+        context=f"subfolders in {path or '/'}",
     )
 
     return files, subfolders, path
+
+
+def _execute_with_retry(request, context: str, retries: int = 3) -> list:
+    """API リクエストを実行し、5xx エラーは指数バックオフでリトライする。
+    リトライ上限を超えた場合は空リストを返して処理を継続する。
+    """
+    delay = 2.0
+    for attempt in range(retries):
+        try:
+            return request.execute().get("files", [])
+        except HttpError as e:
+            if e.resp.status < 500:
+                raise
+            if attempt < retries - 1:
+                print(f"  [warn] {context}: HTTP {e.resp.status}, {delay:.0f}s 後にリトライ ({attempt+1}/{retries-1})", file=sys.stderr)
+                time.sleep(delay)
+                delay *= 2
+            else:
+                print(f"  [skip] {context}: HTTP {e.resp.status} が続くためスキップします", file=sys.stderr)
+                return []
