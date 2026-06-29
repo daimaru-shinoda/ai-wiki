@@ -1,0 +1,10 @@
+.claude/
+.vscode/
+.env
+credentials/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+state.json
