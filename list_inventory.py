@@ -14,6 +14,7 @@ import argparse
 import csv
 import os
 import sys
+import time
 from dotenv import load_dotenv
 
 from src.auth import build_drive_service
@@ -132,6 +133,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4, metavar="N", help="並列フォルダ取得数（デフォルト: 4）")
     args = parser.parse_args()
 
+    _start = time.perf_counter()
     svc = build_drive_service()
 
     # ルートフォルダ名を取得してパスの基点にする
@@ -156,6 +158,9 @@ def main() -> None:
         f["folder_path"] = f"{root_name}/{sub}" if sub else root_name
 
     write_csv(files, state, args.output)
+
+    elapsed = time.perf_counter() - _start
+    print(f"処理時間: {elapsed:.1f} 秒", file=sys.stderr)
 
 
 if __name__ == "__main__":
